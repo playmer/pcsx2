@@ -1810,8 +1810,6 @@ void GSRendererHW::Draw()
 
 									_isReplacing = true; // Signify replacement.
 								}
-
-								_ddsFile.Data.clear();
 							}
 						}
 
