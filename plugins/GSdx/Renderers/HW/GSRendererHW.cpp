@@ -1694,7 +1694,7 @@ void GSRendererHW::Draw()
 					if (_fileCaptured) { // If a path is captured;
 						if (_texMap.find(_currentChecksum) == _texMap.end()) { // If the texture is not already parsed;
 							if (stat(_path.c_str(), &_statBuf) == 0) { // If the captured path actually exists;
-								DDS::DDSFile _ddsFile = DDS::CatchDDS(_path.c_str()); // Parse the DDS file in the path.
+								DDS::DDSFile _ddsFile = DDS::ReadDDS(_path.c_str()); // Parse the DDS file in the path.
 
 								if (_ddsFile.Data.size() > 0) { // If we have data from DDS;
 									auto _tex = m_dev->CreateTexture(_ddsFile.Header.dwWidth, _ddsFile.Header.dwHeight); // Create a GSTexture.
