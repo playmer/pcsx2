@@ -41,5 +41,6 @@ namespace DDS
 		std::vector<unsigned char> Data;
 	};
 
-	DDSFile CatchDDS(const char* fileName);
+	DDSFile ReadDDS(const char* fileName);
+	bool WriteDDS(const std::string& fileName, uint32 dataSize, uint32 width, uint32 height, const uint8* pixelData);
 }

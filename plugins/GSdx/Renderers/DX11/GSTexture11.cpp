@@ -23,6 +23,7 @@
 #include "fstream"
 #include "GSTexture11.h"
 #include "GSPng.h"
+#include "DDS.h"
 
 GSTexture11::GSTexture11(ID3D11Texture2D* texture)
 	: m_texture(texture), m_layer(0)
@@ -104,7 +105,7 @@ void GSTexture11::Unmap()
 	}
 }
 
-bool GSTexture11::SaveDDS(const std::string& fn)
+bool GSTexture11::SaveDDS(const std::string& fileName)
 {
 	CComPtr<ID3D11Texture2D> res;
 	D3D11_TEXTURE2D_DESC desc;
@@ -132,46 +133,11 @@ bool GSTexture11::SaveDDS(const std::string& fn)
 	{
 		return false;
 	}
-
-	std::ofstream _out(fn, std::ios::binary);
-
-	int _zero = 0x00;
+	
 	int const _dataSize = desc.Height * desc.Width * 4;
-
-	uint32_t _output[] = {0x7C, 0x02100F, desc.Height, desc.Width, 0x800, 0x01, 0x01};
-	uint32_t _output2[] = {0x20, 0x41, 0x00, 0x20, 0xFF, 0xFF00, 0xFF0000, 0xFF000000, 0x1000};
-
-	std::vector<unsigned char> _imgData;
-	_imgData.resize(_dataSize);
-
-	memcpy(_imgData.data(), sm.pData, _dataSize);
-
-	for (int i = 3; i < _dataSize; i += 4)
-	{
-		unsigned char const _factor = 2;
-		int _value = std::min(_imgData.at(i) * _factor, 255);
-
-		_imgData.at(i) = static_cast<unsigned char>(_value);
-	}
-
-	_out << "DDS ";
-	_out.write(reinterpret_cast<char*>(&_output), 4 * 7);
-
-	for (int o = 0; o < 11; o++)
-		_out.write(reinterpret_cast<char*>(&_zero), 4);
-
-	_out.write(reinterpret_cast<char*>(&_output2), 4 * 9);
-
-	for (int o = 0; o < 4; o++)
-		_out.write(reinterpret_cast<char*>(&_zero), 4);
-
-	_out.write(reinterpret_cast<char*>(_imgData.data()), _dataSize);
-	_out.close();
-
-	_imgData.clear();
+	bool success = DDS::WriteDDS(fileName, _dataSize, desc.Width, desc.Height, static_cast<uint8*>(sm.pData));
 	m_ctx->Unmap(res, 0);
-
-	return true;
+	return success;
 }
 
 bool GSTexture11::Save(const std::string& fn)
