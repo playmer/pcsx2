@@ -1678,9 +1678,6 @@ void GSRendererHW::Draw()
 				auto const _tmpCRC = crc32(0, Z_NULL, 0);
 				_currentChecksum = crc32(_tmpCRC, _clut.data(), _pLen);
 
-				// Clear the used CLUT data to avoid leaking.
-				_clut.clear();
-
 				if (m_replace_textures) { // If replacing;
 					if (_repTextures.find(_currentChecksum) != _repTextures.end()) { // If a replacement exists for this element;
 						_path.append(_repTextures[_currentChecksum]); // Get the replacement's path.
