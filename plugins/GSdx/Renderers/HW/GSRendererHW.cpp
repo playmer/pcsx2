@@ -33,14 +33,6 @@
 #include <zlib.h>
 #include <iomanip>
 
-// Used as a three-way flag. Made to combat the 0x00000000 CRC at the beginning. 
-int _yamlParse = 1;
-
-// A map is made to hold everything replaced to avoid
-// constant runtime.
-std::map<uint32_t, GSTexture*> _texMap;
-std::map<uint32_t, std::string> _repTextures;
-
 const float GSRendererHW::SSR_UV_TOLERANCE = 1e-3f;
 
 int GSRendererHW::TryParseYaml() {
@@ -73,7 +65,7 @@ int GSRendererHW::TryParseYaml() {
 					for (auto elem : _table)
 					{
 						auto _pair = std::pair<uint32_t, std::string>(elem.first.as<uint32_t>(), elem.second.as<std::string>());
-						_repTextures.insert(_pair);
+						m_replacement_textures.insert(_pair);
 					}
 				}
 
@@ -154,10 +146,7 @@ GSRendererHW::GSRendererHW(GSTextureCache* tc)
 		m_userHacks_merge_sprite         = false;
 	}
 
-	// Initialize the lists used.
-	_texMap = {};
-	_repTextures = {};
-
+	m_yaml_parsed = 1;
 
 	m_dump_root = root_hw;
 }
@@ -358,17 +347,11 @@ void GSRendererHW::Reset()
 	m_reset = true;
 
 	// On reset, release all of the textures parsed.
-	// I do not know how well this works, but it seems
-	// to work well.
-	for (auto const& x : _texMap)
-		delete x.second;
-
-	_texMap = {};
-	_repTextures = {};
-
+	m_texture_map.clear();
+	m_replacement_textures.clear();
 
 	// Set the parse flag to 1 to cause a re-parse.
-	_yamlParse = 1;
+	m_yaml_parsed = 1;
 
 	GSRenderer::Reset();
 }
@@ -401,17 +384,11 @@ void GSRendererHW::ResetDevice()
 	m_tc->RemoveAll();
 
 	// On reset, release all of the textures parsed.
-	// I do not know how well this works, but it seems
-	// to work well.
-	for (auto const& x : _texMap)
-		delete x.second;
-
-	_texMap = {};
-	_repTextures = {};
-
+	m_texture_map.clear();
+	m_replacement_textures.clear();
 
 	// Set the parse flag to 1 to cause a re-parse.
-	_yamlParse = 1;
+	m_yaml_parsed = 1;
 
 	GSRenderer::ResetDevice();
 }
@@ -1256,25 +1233,21 @@ void GSRendererHW::Draw()
 	}
 
 	// If the mode is set to dumping, and the yaml data has been processed;
-	if ((!m_enable_textures || m_dump_textures) && _yamlParse != 1)
+	if ((!m_enable_textures || m_dump_textures) && m_yaml_parsed != 1)
 	{
 		// If the yaml was parsed successfully;
-		if (_yamlParse == 0)
+		if (m_yaml_parsed == 0)
 		{
-			for (auto const& x : _texMap)
-				delete x.second;
-
-			_texMap = {};
-			_repTextures = {};
-		
+			m_texture_map.clear();
+			m_replacement_textures.clear();
 		}
 
-		_yamlParse = 1;
+		m_yaml_parsed = 1;
 	}
 
 	// If replacing textures and the yaml has not been processed;
-	if (_yamlParse == 1 && (m_replace_textures && m_enable_textures))
-		_yamlParse = TryParseYaml();
+	if (m_yaml_parsed == 1 && (m_replace_textures && m_enable_textures))
+		m_yaml_parsed = TryParseYaml();
 
 	if(m_dev->IsLost() || IsBadFrame()) {
 		GL_INS("Warning skipping a draw call (%d)", s_n);
@@ -1679,13 +1652,13 @@ void GSRendererHW::Draw()
 				_currentChecksum = crc32(_tmpCRC, _clut.data(), _pLen);
 
 				if (m_replace_textures) { // If replacing;
-					if (_repTextures.find(_currentChecksum) != _repTextures.end()) { // If a replacement exists for this element;
-						_path.append(_repTextures[_currentChecksum]); // Get the replacement's path.
+					if (m_replacement_textures.find(_currentChecksum) != m_replacement_textures.end()) { // If a replacement exists for this element;
+						_path.append(m_replacement_textures[_currentChecksum]); // Get the replacement's path.
 						_fileCaptured = true; // File path is captured. Go forward.
 					}
 
 					if (_fileCaptured) { // If a path is captured;
-						if (_texMap.find(_currentChecksum) == _texMap.end()) { // If the texture is not already parsed;
+						if (m_texture_map.find(_currentChecksum) == m_texture_map.end()) { // If the texture is not already parsed;
 							if (stat(_path.c_str(), &_statBuf) == 0) { // If the captured path actually exists;
 								DDS::DDSFile _ddsFile = DDS::ReadDDS(_path.c_str()); // Parse the DDS file in the path.
 
@@ -1743,7 +1716,7 @@ void GSRendererHW::Draw()
 										m_dev->CopyRect(_tex, _texFIX, _rect);
 
 										// Insert the fixed texture into the list.
-										_texMap.insert(std::pair<uint32_t, GSTexture*>(_currentChecksum, _texFIX));
+										m_texture_map.insert(std::pair<uint32_t, GSTexture*>(_currentChecksum, _texFIX));
 									}
 									// Some games don't use the `System Size` at all.
 									//
@@ -1773,13 +1746,13 @@ void GSRendererHW::Draw()
 										auto _texFIX = m_dev->CreateTexture(_w, _h);
 										m_dev->CopyRect(_tex, _texFIX, _rect);
 
-										_texMap.insert(std::pair<uint32_t, GSTexture*>(_currentChecksum, _texFIX));
+										m_texture_map.insert(std::pair<uint32_t, GSTexture*>(_currentChecksum, _texFIX));
 									}
 									// Insert the texture to an array, this should prevent us from
 									// parsing the texture over and over again, preventing
 									// performance bottlenecks.
 									else {
-										_texMap.insert(std::pair<uint32_t, GSTexture*>(_currentChecksum, _tex));
+										m_texture_map.insert(std::pair<uint32_t, GSTexture*>(_currentChecksum, _tex));
 									}
 
 									_isReplacing = true; // Signify replacement.
@@ -1820,7 +1793,7 @@ void GSRendererHW::Draw()
 	// The textures have to be replaced inside of DrawPrims.
 	// Do not ask why.
 	if (_isReplacing) {
-		DrawPrims(rt_tex, ds_tex, m_src, _texMap[_currentChecksum]);
+		DrawPrims(rt_tex, ds_tex, m_src, m_texture_map[_currentChecksum].get());
 	}
 	else {
 		DrawPrims(rt_tex, ds_tex, m_src);
