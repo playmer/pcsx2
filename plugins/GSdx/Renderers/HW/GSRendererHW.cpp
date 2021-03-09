@@ -1673,11 +1673,10 @@ void GSRendererHW::Draw()
 										_ddsFile.Data.at(0x03 + i) = _ddsFile.Data.at(0x03 + i) / 2;
 
 									// Update the created GSTexture with the data from the DDS.
-									auto const _data = _ddsFile.Data;
 									auto const _pitch = _ddsFile.Header.dwWidth * 4;
 
 									auto const _rect = GSVector4i(0, 0, _ddsFile.Header.dwWidth, _ddsFile.Header.dwHeight);
-									_tex->Update(_rect, _data.data(), _pitch, 0);
+									_tex->Update(_rect, _ddsFile.Data.data(), _pitch, 0);
 
 									// This part is complicated. Since we fix the textures
 									// that use UV for their size information, we cannot do
