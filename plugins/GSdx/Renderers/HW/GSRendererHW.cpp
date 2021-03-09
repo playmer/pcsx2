@@ -1810,6 +1810,9 @@ void GSRendererHW::Draw()
 
 									_isReplacing = true; // Signify replacement.
 								}
+								else { // There's a read error with the DDS
+									printf("Error: Replacement DDS texture (%s) of wrong format. Make sure it's DXGI_FORMAT_R8G8B8A8_UNORM.\n", _path.c_str());
+								}
 							}
 						}
 
