@@ -1730,6 +1730,19 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 				auto palette = m_src->m_palette_obj.get();
 				auto paletteLength = palette->m_pal;
 
+				// FIXME: Beyond the plan to change to a different hash, we can't hash 
+				//	the CLUT data this way. This is only storing paletteLength bytes,
+				//	rather than paletteLength * sizeof(uint32) bytes. This is due to
+				//	this std::vector constructor taking an arbitrary InputIt. The
+				//	constructor will simply downcast the uint32 data to Bytef
+				//	(unsigned char) under the hood, so we will lose 3 of each 4 byte
+				//	int. This is demonstrated here: https://godbolt.org/z/5sz9hx
+				//	The CLUT is already a diminished approximation of a texture, I
+				//	don't think we can afford to lose more data.
+				//
+				//	When I adjusted this, it caused a crash early in the game I was testing
+				//	during texture replacement, so I've held off for now. But changing this
+				//	did fix some issues with textures being incorrectly replaced.
 				// Capture the CLUT data as Bytef for zlib/crc32
 				std::vector<Bytef> clut(palette->m_clut, palette->m_clut + paletteLength);
 
