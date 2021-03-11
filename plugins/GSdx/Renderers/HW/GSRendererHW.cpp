@@ -1622,6 +1622,92 @@ void GSRendererHW::Draw()
 		}
 	}
 
+	TextureHandling(rt_tex, ds_tex);
+
+	frame_iterator++;
+
+	if (frame_iterator > 60)
+		frame_iterator = 0;
+
+	context->TEST = TEST;
+	context->FRAME = FRAME;
+	context->ZBUF = ZBUF;
+
+	//
+
+	// Help to detect rendering outside of the framebuffer
+#if _DEBUG
+	if (m_upscale_multiplier * m_r.z > m_width) {
+		GL_INS("ERROR: RT width is too small only %d but require %d", m_width, m_upscale_multiplier * m_r.z);
+	}
+	if (m_upscale_multiplier * m_r.w > m_height) {
+		GL_INS("ERROR: RT height is too small only %d but require %d", m_height, m_upscale_multiplier * m_r.w);
+	}
+#endif
+
+	if(fm != 0xffffffff && rt)
+	{
+		//rt->m_valid = rt->m_valid.runion(r);
+		rt->UpdateValidity(m_r);
+
+		m_tc->InvalidateVideoMem(context->offset.fb, m_r, false);
+
+		m_tc->InvalidateVideoMemType(GSTextureCache::DepthStencil, context->FRAME.Block());
+	}
+
+	if(zm != 0xffffffff && ds)
+	{
+		//ds->m_valid = ds->m_valid.runion(r);
+		ds->UpdateValidity(m_r);
+
+		m_tc->InvalidateVideoMem(context->offset.zb, m_r, false);
+
+		m_tc->InvalidateVideoMemType(GSTextureCache::RenderTarget, context->ZBUF.Block());
+	}
+
+	//
+
+	if(m_hacks.m_oo)
+	{
+		(this->*m_hacks.m_oo)();
+	}
+
+	if(s_dump)
+	{
+		uint64 frame = m_perfmon.GetFrame();
+
+		std::string s;
+
+		if(s_save && s_n >= s_saven)
+		{
+			s = format("%05d_f%lld_rt1_%05x_%s.bmp", s_n, frame, context->FRAME.Block(), psm_str(context->FRAME.PSM));
+
+			if (rt)
+				rt->m_texture->Save(m_dump_root+s);
+		}
+
+		if(s_savez && s_n >= s_saven)
+		{
+			s = format("%05d_f%lld_rz1_%05x_%s.bmp", s_n, frame, context->ZBUF.Block(), psm_str(context->ZBUF.PSM));
+
+			if (ds_tex)
+				ds_tex->Save(m_dump_root+s);
+		}
+
+		if(s_savel > 0 && (s_n - s_saven) > s_savel)
+		{
+			s_dump = 0;
+		}
+	}
+
+	#ifdef DISABLE_HW_TEXTURE_CACHE
+	if (rt)
+		m_tc->Read(rt, m_r);
+	#endif
+}
+
+void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
+{
 	// Declare some temporary variables.
 	bool _isDumping = false;
 	bool _isReplacing = false;
@@ -1771,7 +1857,7 @@ void GSRendererHW::Draw()
 					_statBuf = {}; // Clear the stat buffer.
 
 					// Stringify game checksum and use it as the name for the folder of
-					// dumped texture.
+					// the dumped texture.
 					_path.append(GSUtil::GetHEX32String(m_crc));
 					_path.append("\\");
 
@@ -1789,13 +1875,15 @@ void GSRendererHW::Draw()
 		}
 	}
 
+	
+
 	// The textures have to be replaced inside of DrawPrims.
 	// Do not ask why.
 	if (_isReplacing) {
-		DrawPrims(rt_tex, ds_tex, m_src, m_texture_map[_currentChecksum].get());
+		DrawPrims(rt, ds, m_src, m_texture_map[_currentChecksum].get());
 	}
 	else {
-		DrawPrims(rt_tex, ds_tex, m_src);
+		DrawPrims(rt, ds, m_src);
 	}
 
 	// This is the bane of my existence.
@@ -1874,88 +1962,8 @@ void GSRendererHW::Draw()
 		// I do not want leaks to happen.
 		_aligned_free(_data);
 	}
-
-	frame_iterator++;
-
-	if (frame_iterator > 60)
-		frame_iterator = 0;
-
-	context->TEST = TEST;
-	context->FRAME = FRAME;
-	context->ZBUF = ZBUF;
-
-	//
-
-	// Help to detect rendering outside of the framebuffer
-#if _DEBUG
-	if (m_upscale_multiplier * m_r.z > m_width) {
-		GL_INS("ERROR: RT width is too small only %d but require %d", m_width, m_upscale_multiplier * m_r.z);
-	}
-	if (m_upscale_multiplier * m_r.w > m_height) {
-		GL_INS("ERROR: RT height is too small only %d but require %d", m_height, m_upscale_multiplier * m_r.w);
-	}
-#endif
-
-	if(fm != 0xffffffff && rt)
-	{
-		//rt->m_valid = rt->m_valid.runion(r);
-		rt->UpdateValidity(m_r);
-
-		m_tc->InvalidateVideoMem(context->offset.fb, m_r, false);
-
-		m_tc->InvalidateVideoMemType(GSTextureCache::DepthStencil, context->FRAME.Block());
-	}
-
-	if(zm != 0xffffffff && ds)
-	{
-		//ds->m_valid = ds->m_valid.runion(r);
-		ds->UpdateValidity(m_r);
-
-		m_tc->InvalidateVideoMem(context->offset.zb, m_r, false);
-
-		m_tc->InvalidateVideoMemType(GSTextureCache::RenderTarget, context->ZBUF.Block());
-	}
-
-	//
-
-	if(m_hacks.m_oo)
-	{
-		(this->*m_hacks.m_oo)();
-	}
-
-	if(s_dump)
-	{
-		uint64 frame = m_perfmon.GetFrame();
-
-		std::string s;
-
-		if(s_save && s_n >= s_saven)
-		{
-			s = format("%05d_f%lld_rt1_%05x_%s.bmp", s_n, frame, context->FRAME.Block(), psm_str(context->FRAME.PSM));
-
-			if (rt)
-				rt->m_texture->Save(m_dump_root+s);
-		}
-
-		if(s_savez && s_n >= s_saven)
-		{
-			s = format("%05d_f%lld_rz1_%05x_%s.bmp", s_n, frame, context->ZBUF.Block(), psm_str(context->ZBUF.PSM));
-
-			if (ds_tex)
-				ds_tex->Save(m_dump_root+s);
-		}
-
-		if(s_savel > 0 && (s_n - s_saven) > s_savel)
-		{
-			s_dump = 0;
-		}
-	}
-
-	#ifdef DISABLE_HW_TEXTURE_CACHE
-	if (rt)
-		m_tc->Read(rt, m_r);
-	#endif
 }
+
 
 // hacks
 

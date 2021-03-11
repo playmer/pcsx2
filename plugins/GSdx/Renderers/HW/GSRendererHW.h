@@ -151,6 +151,7 @@ protected:
 
 	virtual void DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* tex, GSTexture* inp = nullptr) = 0;
 	int TryParseYaml();
+	void TextureHandling(GSTexture* rt, GSTexture* ds);
 
 	// Used as a three-way flag. Made to combat the 0x00000000 CRC at the beginning. 
 	int m_yaml_parsed;
