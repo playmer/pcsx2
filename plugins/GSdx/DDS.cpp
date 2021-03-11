@@ -50,8 +50,6 @@ DDS::DDSFile DDS::ReadDDS(const char* fileName) {
 }
 
 bool DDS::WriteDDS(const std::string& fileName, uint32 dataSize, uint32 width, uint32 height, const uint8* pixelData) {
-	printf("Writing file %s\n", fileName.c_str());
-
 	std::ofstream _out(fileName, std::ios::binary);
 
 	const int _zero = 0x00;

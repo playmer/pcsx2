@@ -1742,7 +1742,9 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 				//
 				//	When I adjusted this, it caused a crash early in the game I was testing
 				//	during texture replacement, so I've held off for now. But changing this
-				//	did fix some issues with textures being incorrectly replaced.
+				//	did fix some issues with textures being incorrectly replaced. I suspect
+				//	there's actually only an issue with a texture I'm now replacing, but
+				//	without currently being able to test more games, I'm being hesitant.
 				// Capture the CLUT data as Bytef for zlib/crc32
 				std::vector<Bytef> clut(palette->m_clut, palette->m_clut + paletteLength);
 
@@ -1772,10 +1774,10 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 										ddsFile.Data.at(0x03 + i) = ddsFile.Data.at(0x03 + i) / 2;
 
 									// Update the created GSTexture with the data from the DDS.
-									auto const _pitch = ddsFile.Header.dwWidth * 4;
+									auto const pitch = ddsFile.Header.dwWidth * 4;
 
 									auto const rect = GSVector4i(0, 0, ddsFile.Header.dwWidth, ddsFile.Header.dwHeight);
-									texture->Update(rect, ddsFile.Data.data(), _pitch, 0);
+									texture->Update(rect, ddsFile.Data.data(), pitch, 0);
 
 									// This part is complicated. Since we fix the textures
 									// that use UV for their size information, we cannot do
