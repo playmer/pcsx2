@@ -45,7 +45,7 @@ endif()
 
 
 set(GSdxSources
-	DDS.cpp
+    DDS.cpp
     GS.cpp
     GSAlignedClass.cpp
     GSBlock.cpp
@@ -110,7 +110,7 @@ set(GSdxSources
     )
 
 set(GSdxHeaders
-	DDS.h
+    DDS.h
     config.h
     GSAlignedClass.h
     GSBlock.h
@@ -240,7 +240,7 @@ set(GSdxFinalLibs
     ${PNG_LIBRARIES}
     ${FREETYPE_LIBRARIES}
     ${LIBLZMA_LIBRARIES}
-	yaml-cpp
+    yaml-cpp
 )
 
 if(USE_VTUNE)
