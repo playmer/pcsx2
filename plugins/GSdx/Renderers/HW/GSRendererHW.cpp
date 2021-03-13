@@ -33,6 +33,8 @@
 #include <zlib.h>
 #include <iomanip>
 
+#define NEEDS_SEPARATE_TEXTURE_FIX 0
+
 const float GSRendererHW::SSR_UV_TOLERANCE = 1e-3f;
 
 int GSRendererHW::TryParseYaml() {
@@ -64,8 +66,10 @@ int GSRendererHW::TryParseYaml() {
 
 					for (auto elem : _table)
 					{
-						auto _pair = std::pair<uint32_t, std::string>(elem.first.as<uint32_t>(), elem.second.as<std::string>());
-						m_replacement_textures.insert(_pair);
+						std::string texturePath = "textures\\";
+						//auto _pair = std::pair<uint32_t, std::string>(elem.first.as<uint32_t>(), elem.second.as<std::string>());
+						//m_replacement_textures.insert(_pair);
+						m_replacement_textures.emplace(elem.first.as<uint32_t>(), texturePath + elem.second.as<std::string>());
 					}
 				}
 
@@ -1706,185 +1710,175 @@ void GSRendererHW::Draw()
 	#endif
 }
 
+static const char* StatErrorToString()
+{
+	switch (errno)
+	{
+		case EACCES: 
+			return "Search permission is denied for a component of the path prefix.";
+		case EIO: 
+			return "An error occurred while reading from the file system.";
+		case ELOOP: 
+			return "A loop exists in symbolic links encountered during resolution of the path argument.";
+		case ENAMETOOLONG: 
+			return "The length of the path argument exceeds {PATH_MAX} or a pathname component is longer than {NAME_MAX}.";
+		case ENOENT: 
+			return "A component of path does not name an existing file or path is an empty string.";
+		case ENOTDIR: 
+			return "A component of the path prefix is not a directory.";
+		case EOVERFLOW: 
+			return "The file size in bytes or the number of blocks allocated to the file or the file serial number cannot be represented correctly in the structure pointed to by buf.";
+		default: 
+			return "Unknown Error";
+	}
+}
+
+std::unique_ptr<GSTexture, GSRendererHW::TextureDeleter> GSRendererHW::MakeUniqueTexture(GSDevice* device, int w, int h, int format){
+	GSTexture* texture = device->CreateTexture(w,h,format);
+	return std::unique_ptr<GSTexture, TextureDeleter>{texture, TextureDeleter(device)};
+}
+
+GSTexture* GSRendererHW::ReplaceTexture(uLong checksum)
+{
+	auto textureMapIt = m_texture_map.find(checksum);
+	if (textureMapIt != m_texture_map.end()) { // Already parsed and replaced this texture before, so return it.
+		return textureMapIt->second.get();
+	}
+
+	auto replacementTextureMapIt = m_replacement_textures.find(checksum);
+	if (replacementTextureMapIt == m_replacement_textures.end()) { // If a replacement exists for this element;
+		return nullptr;
+	}
+
+	const std::string& texturePath = replacementTextureMapIt->second; // Get the replacement's path.
+
+	struct stat statBuffer = {};
+	if (stat(texturePath.c_str(), &statBuffer) == -1) { // Couldn't find/access the given file path.
+		printf("Could not access replacement texture (%s) due to: %s", texturePath.c_str(), StatErrorToString());
+		return nullptr;
+	}
+	
+	DDS::DDSFile ddsFile = DDS::ReadDDS(texturePath.c_str()); // Parse the DDS file in the path.
+
+	if (ddsFile.Data.size() == 0) { // Some sort of read error occured. Likely we have an incorrectly formated DDS file.
+		printf("Error: Replacement DDS texture (%s) of wrong format. Make sure it's DXGI_FORMAT_R8G8B8A8_UNORM or DXGI_FORMAT_B8G8R8A8_UNORM.\n", texturePath.c_str());
+		return nullptr;
+	}
+
+	// This loop is for adjusting the DDS' alpha to
+	// comply with PS2 Standards, since it is adjusted again
+	// on DrawPrims. If I do not do this, full opaque images
+	// look broken.
+	for (uint32_t i = 0; i < ddsFile.Data.size(); i += 0x04)
+		ddsFile.Data.at(0x03 + i) = ddsFile.Data.at(0x03 + i) / 2;
+	
+	int widthRatio =  0;
+	int heightRatio =  0;
+	
+	UniqueTexture texture = MakeUniqueTexture(m_dev, ddsFile.Header.dwWidth, ddsFile.Header.dwHeight);
+	
+	// Update the created GSTexture with the data from the DDS.
+	auto const pitch = ddsFile.Header.dwWidth * 4;
+	auto const rect = GSVector4i(0, 0, ddsFile.Header.dwWidth, ddsFile.Header.dwHeight);
+	texture->Update(rect, ddsFile.Data.data(), pitch, 0);
+	bool needsFixup = false;
+
+	// This part is complicated. Since we fix the textures
+	// that use UV for their size information, we cannot do
+	// a straight replacement like we do for textures that use
+	// actual size registers.
+	//
+	// To mitigate this, we need to calculate a canvas size for
+	// the replacements and apply the texture we read from the
+	// directory unto the canvas we created.
+	if (m_context->CLAMP.MAXU > 0 || m_context->CLAMP.MINU > 0) {
+		needsFixup = true;
+		// Get the origin UV Information.
+		auto u = m_context->CLAMP.MAXU > 0 ? m_context->CLAMP.MAXU : m_context->CLAMP.MINU;
+		auto v = m_context->CLAMP.MAXV > 0 ? m_context->CLAMP.MAXV : m_context->CLAMP.MINV;
+
+		// Correct the origin UV information to be a multiple of 32.
+		// Why a multiple of 32? Who knows! Textures come out garbled
+		// if I use 2, 8 or 16. So 32 it is.
+		u += 32 - (u % 32);
+		v += 32 - (v % 32);
+
+		// Calculate the relation between the canvas and the
+		// origin UV information.
+		widthRatio = (1 << m_context->TEX0.TW) / u;
+		heightRatio = (1 << static_cast<uint32>(m_context->TEX0.TH)) / v;
+	}
+	// Some games don't use the `System Size` at all.
+	//
+	// I do not know how they get their sizes. But I found
+	// that I can tap into the write rectangle of the source to get
+	// an acceptable texture. The downshot of this is, of course, that
+	// some textures may not be dumped correctly. 
+	//
+	// P.S. We basically do what we do for the UV stuff, but with m_write
+	// dimensions.
+	else if (m_context->TEX0.TW == 1024 && m_context->TEX0.TH == 1024) {
+		needsFixup = true;
+		auto writeRectWidth = m_src->m_write.rect->right;
+		auto writeRectHeight = m_src->m_write.rect->bottom;
+
+		writeRectWidth += 32 - (writeRectWidth % 32);
+		writeRectHeight += 32 - (writeRectHeight % 32);
+
+		widthRatio = (1 << m_context->TEX0.TW) / writeRectWidth;
+		heightRatio = (1 << static_cast<uint32>(m_context->TEX0.TH)) / writeRectHeight;
+	}
+	
+	if (needsFixup)
+	{
+		auto width = widthRatio * ddsFile.Header.dwWidth;
+		auto height = heightRatio * ddsFile.Header.dwHeight;
+
+		width = pow(2, ceil(log(width) / log(2)));
+		height = pow(2, ceil(log(height) / log(2)));
+
+		// Generate the canvas and applied the parsed texture
+		// to the generated canvas.
+		GSTexture* fixedTexture = m_dev->CreateTexture(width, height);
+		m_dev->CopyRect(texture.get(), fixedTexture, rect);
+		
+		texture.reset(fixedTexture);
+	}
+	
+	auto result = m_texture_map.emplace(checksum, std::move(texture));
+	
+	// This should never happen because we've already checked if there's
+	// an item with this key in the map, but for consistency we're
+	// checking.
+	if (result.second == false) { 
+		return nullptr;
+	}
+
+	return result.first->second.get();
+}
+
 void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 {
 	// Declare some temporary variables.
-	bool isDumping = false;
-	bool isReplacing = false;
-
-	std::string texturePath = "";
-	uint32_t currentChecksum = 0;
+	bool canDump = false;
+	GSTexture* replacedTexture = nullptr;
+	uLong checksum = 0;
 
 	if (m_enable_textures) { // If texture functions are enabled;
-		if (m_src && !m_src->m_from_target) { // If the texture is not a screenshot of the frame;
-			struct stat statBuffer = {};
+		if (m_src && !m_src->m_from_target) { // If the texture is not a screenshot of the frame;			
+			if (m_src->m_palette_obj) { // If a palette of the texture don't exist, we can't replace it.
+				canDump = true;
 
-			// Specify the path we will read from.
-			texturePath = "textures\\";
-
-			// Indicates if a file path is found.
-			bool fileCaptured = false;
-
-			if (m_src->m_palette_obj) { // If a palette of the texture exists;
 				// Capture the data to checksum.
 				auto palette = m_src->m_palette_obj.get();
 				auto paletteLength = palette->m_pal;
 
-				// FIXME: Beyond the plan to change to a different hash, we can't hash 
-				//	the CLUT data this way. This is only storing paletteLength bytes,
-				//	rather than paletteLength * sizeof(uint32) bytes. This is due to
-				//	this std::vector constructor taking an arbitrary InputIt. The
-				//	constructor will simply downcast the uint32 data to Bytef
-				//	(unsigned char) under the hood, so we will lose 3 of each 4 byte
-				//	int. This is demonstrated here: https://godbolt.org/z/5sz9hx
-				//	The CLUT is already a diminished approximation of a texture, I
-				//	don't think we can afford to lose more data.
-				//
-				//	When I adjusted this, it caused a crash early in the game I was testing
-				//	during texture replacement, so I've held off for now. But changing this
-				//	did fix some issues with textures being incorrectly replaced. I suspect
-				//	there's actually only an issue with a texture I'm now replacing, but
-				//	without currently being able to test more games, I'm being hesitant.
-				// Capture the CLUT data as Bytef for zlib/crc32
-				std::vector<Bytef> clut(palette->m_clut, palette->m_clut + paletteLength);
-
 				// Calculate a CRC32 value from the palette CLUT data.
 				auto const tempCRC = crc32(0, Z_NULL, 0);
-				currentChecksum = crc32(tempCRC, clut.data(), paletteLength);
-
-				if (m_replace_textures) { // If replacing;
-					if (m_replacement_textures.find(currentChecksum) != m_replacement_textures.end()) { // If a replacement exists for this element;
-						texturePath.append(m_replacement_textures[currentChecksum]); // Get the replacement's path.
-						fileCaptured = true; // File path is captured. Go forward.
-					}
-
-					if (fileCaptured) { // If a path is captured;
-						if (m_texture_map.find(currentChecksum) == m_texture_map.end()) { // If the texture is not already parsed;
-							if (stat(texturePath.c_str(), &statBuffer) == 0) { // If the captured path actually exists;
-								DDS::DDSFile ddsFile = DDS::ReadDDS(texturePath.c_str()); // Parse the DDS file in the path.
-
-								if (ddsFile.Data.size() > 0) { // If we have data from DDS;
-									auto texture = m_dev->CreateTexture(ddsFile.Header.dwWidth, ddsFile.Header.dwHeight); // Create a GSTexture.
-
-									// This loop is for adjusting the DDS' alpha to
-									// comply with PS2 Standards, since it is adjusted again
-									// on DrawPrims. If I do not do this, full opaque images
-									// look broken.
-									for (uint32_t i = 0; i < ddsFile.Data.size(); i += 0x04)
-										ddsFile.Data.at(0x03 + i) = ddsFile.Data.at(0x03 + i) / 2;
-
-									// Update the created GSTexture with the data from the DDS.
-									auto const pitch = ddsFile.Header.dwWidth * 4;
-
-									auto const rect = GSVector4i(0, 0, ddsFile.Header.dwWidth, ddsFile.Header.dwHeight);
-									texture->Update(rect, ddsFile.Data.data(), pitch, 0);
-
-									// This part is complicated. Since we fix the textures
-									// that use UV for their size information, we cannot do
-									// a straight replacement like we do for textures that use
-									// actual size registers.
-									//
-									// To mitigate this, we need to calculate a canvas size for
-									// the replacements and apply the texture we read from the
-									// directory unto the canvas we created.
-									if (m_context->CLAMP.MAXU > 0 || m_context->CLAMP.MINU > 0) {
-										// Get the origin UV Information.
-										auto u = m_context->CLAMP.MAXU > 0 ? m_context->CLAMP.MAXU : m_context->CLAMP.MINU;
-										auto v = m_context->CLAMP.MAXV > 0 ? m_context->CLAMP.MAXV : m_context->CLAMP.MINV;
-
-										// Correct the origin UV information to be a multiple of 32.
-										// Why a multiple of 32? Who knows! Textures come out garbled
-										// if I use 2, 8 or 16. So 32 it is.
-										u += 32 - (u % 32);
-										v += 32 - (v % 32);
-
-										// Calculate the relation between the canvas and the
-										// origin UV information.
-										int const widthRatio = (1 << m_context->TEX0.TW) / u;
-										int const heightRatio = (1 << static_cast<uint32>(m_context->TEX0.TH)) / v;
-										
-										// Generate the new canvas size for the replacement.
-										auto width = widthRatio * ddsFile.Header.dwWidth;
-										auto height = heightRatio * ddsFile.Header.dwHeight;
-
-										width = pow(2, ceil(log(width) / log(2)));
-										height = pow(2, ceil(log(height) / log(2)));
-
-										// Generate the canvas and applied the parsed texture
-										// to the generated canvas.
-										auto fixedTexture = m_dev->CreateTexture(width, height);
-										m_dev->CopyRect(texture, fixedTexture, rect);
-
-										// Insert the fixed texture into the list.
-										m_texture_map.insert(std::pair<uint32_t, GSTexture*>(currentChecksum, fixedTexture));
-									}
-									// Some games don't use the `System Size` at all.
-									//
-									// I do not know how they get their sizes. But I found
-									// that I can tap into the write rectangle of the source to get
-									// an acceptable texture. The downshot of this is, of course, that
-									// some textures may not be dumped correctly. 
-									//
-									// P.S. We basically do what we do for the UV stuff, but with m_write
-									// dimensions.
-									else if (m_context->TEX0.TW == 1024 && m_context->TEX0.TH == 1024) {
-										auto writeRectWidth = m_src->m_write.rect->right;
-										auto writeRectHeight = m_src->m_write.rect->bottom;
-
-										writeRectWidth += 32 - (writeRectWidth % 32);
-										writeRectHeight += 32 - (writeRectHeight % 32);
-
-										int const widthRatio = (1 << m_context->TEX0.TW) / writeRectWidth;
-										int const heightRatio = (1 << static_cast<uint32>(m_context->TEX0.TH)) / writeRectHeight;
-
-										auto width = widthRatio * ddsFile.Header.dwWidth;
-										auto height = heightRatio * ddsFile.Header.dwHeight;
-
-										width = pow(2, ceil(log(width) / log(2)));
-										height = pow(2, ceil(log(height) / log(2)));
-
-										auto fixedTexture = m_dev->CreateTexture(width, height);
-										m_dev->CopyRect(texture, fixedTexture, rect);
-
-										m_texture_map.insert(std::pair<uint32_t, GSTexture*>(currentChecksum, fixedTexture));
-									}
-									// Insert the texture to a map, this should prevent us from
-									// parsing the texture over and over again, preventing
-									// performance bottlenecks.
-									else {
-										m_texture_map.insert(std::pair<uint32_t, GSTexture*>(currentChecksum, texture));
-									}
-
-									isReplacing = true; // Signify replacement.
-								}
-								else { // There's a read error with the DDS
-									printf("Error: Replacement DDS texture (%s) of wrong format. Make sure it's DXGI_FORMAT_R8G8B8A8_UNORM or DXGI_FORMAT_B8G8R8A8_UNORM.\n", texturePath.c_str());
-								}
-							}
-						}
-
-						else // If we have parsed the texture before;
-							isReplacing = true; // Signify replacement.
-					}
-				}
-				else if (frame_iterator == 0 && m_dump_textures) { // If dumping;
-					texturePath.append("@DUMP\\"); // Signify dumping directory.
-					statBuffer = {}; // Clear the stat buffer.
-
-					// Stringify game checksum and use it as the name for the folder of
-					// the dumped texture.
-					texturePath.append(GSUtil::GetHEX32String(m_crc));
-					texturePath.append("\\");
-
-					// Stringify image checksum and use it as the name for the dumped
-					// texture.
-					texturePath.append(GSUtil::GetHEX32String(currentChecksum));
-					texturePath.append(".dds");
-
-					if (stat(texturePath.c_str(), &statBuffer) != 0) { // If the file is not found;
-						printf("GSdx: Dumping texture with ID: 0x%X\n", currentChecksum);
-						isDumping = true; // Signify dumping.
-					}
+				checksum = crc32(tempCRC, reinterpret_cast<const Bytef*>(palette->m_clut), paletteLength * sizeof(uint32));
+				
+				if (m_replace_textures) {
+					replacedTexture = ReplaceTexture(checksum);
 				}
 			}
 		}
@@ -1892,8 +1886,8 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 
 	// The textures have to be replaced inside of DrawPrims.
 	// Do not ask why.
-	if (isReplacing) {
-		DrawPrims(rt, ds, m_src, m_texture_map[currentChecksum].get());
+	if (replacedTexture != nullptr) {
+		DrawPrims(rt, ds, m_src, replacedTexture);
 	}
 	else {
 		DrawPrims(rt, ds, m_src);
@@ -1903,7 +1897,24 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 	// Yes, this is hacky. Yes, this does not
 	// work for all games. But hey, the PS2 has
 	// no standards now, does it?
-	if (isDumping) {
+	if (frame_iterator == 0 && canDump && m_dump_textures) { // If dumping;
+		std::string texturePath = "textures\\@DUMP\\"; // Signify dumping directory.
+
+		// Stringify game checksum and use it as the name for the folder of
+		// the dumped texture.
+		texturePath.append(GSUtil::GetHEX32String(m_crc));
+		texturePath.append("\\");
+
+		// Stringify image checksum and use it as the name for the dumped
+		// texture.
+		texturePath.append(GSUtil::GetHEX32String(checksum));
+		texturePath.append(".dds");
+		
+		struct stat statBuffer = {};
+		if (stat(texturePath.c_str(), &statBuffer) != 0) { // If the file is not found;
+			printf("GSdx: Dumping texture with ID: 0x%X\n", checksum);
+		}
+
 		// Get the dimensions from the registers.
 		auto const height = (1 << m_context->TEX0.TH);
 		auto const width = (1 << m_context->TEX0.TW);
@@ -1933,8 +1944,12 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 
 		// Create the texture to be dumped and apply
 		// the captured data to it.
-		auto texture = m_dev->CreateTexture(width, height);
+		UniqueTexture texture = MakeUniqueTexture(m_dev, width, height);
 		texture->Update(rect, data, pitch);
+
+		int u = 0;
+		int v = 0;
+		bool needsFixup = false;
 
 		// Some games use a large canvas with UV parameters for their
 		// texture dimensions. If this is the case for this texture,
@@ -1942,34 +1957,30 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 		if (m_context->CLAMP.MAXU > 0 || m_context->CLAMP.MINU > 0)
 		{
 			// Sometimes it uses the MAX, sometimes it uses the MIN, sometimes it's both.
-			auto const u = m_context->CLAMP.MAXU > 0 ? m_context->CLAMP.MAXU : m_context->CLAMP.MINU;
-			auto const v = m_context->CLAMP.MAXV > 0 ? m_context->CLAMP.MAXV : m_context->CLAMP.MINV;
-
-			// Create and correct the output rect to be a multiple of 32.
-			// Why 32? I do not know. And I honestly do not want to know.
-			auto const uvRect = GSVector4i(0, 0, u, v);
-			auto textureSave = m_dev->CreateTexture(u + 32 - (u % 32), v + 32 - (v % 32));
-
-			// Copy the data from the big ass canvas to the corrected size and save it.
-			m_dev->CopyRect(texture, textureSave, uvRect);
-			textureSave->SaveDDS(texturePath);
+			u = m_context->CLAMP.MAXU > 0 ? m_context->CLAMP.MAXU : m_context->CLAMP.MINU;
+			v = m_context->CLAMP.MAXV > 0 ? m_context->CLAMP.MAXV : m_context->CLAMP.MINV;
+			needsFixup = true;
 		}
 		// Some games want me to suffer. This is not a good idea.
 		// But hey, it is the only thing I could come up with. Perhaps
 		// someone smarter than me will fix it. If so: PLEASE do.
 		else if (width == 1024 && height == 1024) {
-			auto const writeRectWidth = m_src->m_write.rect->right;
-			auto const writeRectHeight  = m_src->m_write.rect->bottom;
-
-			auto const uvRect = GSVector4i(0, 0, writeRectWidth, writeRectHeight);
-			auto textureSave = m_dev->CreateTexture(writeRectWidth + 32 - (writeRectWidth % 32), writeRectHeight + 32 - (writeRectHeight % 32));
-
-			m_dev->CopyRect(texture, textureSave, uvRect);
-			textureSave->SaveDDS(texturePath);
+			u = m_src->m_write.rect->right;
+			v  = m_src->m_write.rect->bottom;
+			needsFixup = true;
 		} 
-		else { // No correction needed, save the texture as-is.
-			texture->SaveDDS(texturePath);
+
+		if (needsFixup) {
+			// Create and correct the output rect to be a multiple of 32.
+			// Why 32? I do not know. And I honestly do not want to know.
+			auto const uvRect = GSVector4i(0, 0, u, v);
+			auto textureSave = m_dev->CreateTexture(u + 32 - (u % 32), v + 32 - (v % 32));
+
+			m_dev->CopyRect(texture.get(), textureSave, uvRect);
+			texture.reset(textureSave);
 		}
+		
+		texture->SaveDDS(texturePath);
 
 		// I do not want leaks to happen.
 		_aligned_free(data);

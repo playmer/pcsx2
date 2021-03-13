@@ -143,15 +143,34 @@ private:
 	template <bool linear> void RoundSpriteOffset();
 
 protected:
-	std::map<uint32_t, std::unique_ptr<GSTexture>> m_texture_map;
+	struct TextureDeleter {
+		TextureDeleter(GSDevice* device)
+			: m_device{device} 
+		{
+	
+		}
+
+		void operator()(GSTexture* texture) {
+		}
+
+		GSDevice* m_device;
+	};
+
+	static std::unique_ptr<GSTexture, TextureDeleter> MakeUniqueTexture(GSDevice* device, int w, int h, int format = 0);
+
+	using UniqueTexture = std::unique_ptr<GSTexture, TextureDeleter>;
+
+	std::map<uint32_t, UniqueTexture> m_texture_map;
 	std::map<uint32_t, std::string> m_replacement_textures;
 	GSTextureCache* m_tc;
 	GSVector4i m_r;
 	GSTextureCache::Source* m_src;
 
+	
 	virtual void DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* tex, GSTexture* inp = nullptr) = 0;
 	int TryParseYaml();
 	void TextureHandling(GSTexture* rt, GSTexture* ds);
+	GSTexture* ReplaceTexture(uLong checksum);
 
 	// Used as a three-way flag. Made to combat the 0x00000000 CRC at the beginning. 
 	int m_yaml_parsed;
