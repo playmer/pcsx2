@@ -1061,11 +1061,11 @@ void GSRendererDX11::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sou
 	else
 		dev->OMSetRenderTargets(rt, ds, &scissor);
 
-	if (inp != nullptr)
+	if (inp != nullptr) {
 		dev->PSSetShaderResource(0, inp);
-
-	else
-	{
+		dev->PSSetShaderResource(1, tex ? tex->m_palette : NULL);
+	}
+	else {
 		dev->PSSetShaderResource(0, tex ? tex->m_texture : NULL);
 		dev->PSSetShaderResource(1, tex ? tex->m_palette : NULL);
 	}

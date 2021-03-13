@@ -784,11 +784,12 @@ void GSRendererOGL::EmulateTextureSampler(const GSTextureCache::Source* tex, GST
 	// Setup Texture ressources
 	dev->SetupSampler(m_ps_ssel);
 
-	if (inp != nullptr)
-		dev->PSSetShaderResources(inp, nullptr);
-
-	else
+	if (inp != nullptr) {
+		dev->PSSetShaderResources(inp, tex->m_palette);
+	}
+	else {
 		dev->PSSetShaderResources(tex->m_texture, tex->m_palette);
+	}
 }
 
 GSRendererOGL::PRIM_OVERLAP GSRendererOGL::PrimitiveOverlap()
