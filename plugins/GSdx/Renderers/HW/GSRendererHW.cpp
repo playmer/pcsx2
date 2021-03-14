@@ -1762,6 +1762,10 @@ GSTexture* GSRendererHW::ReplaceTexture(uLong checksum)
 
 	if (ddsFile.Data.size() == 0) { // Some sort of read error occured. Likely we have an incorrectly formated DDS file.
 		printf("Error: Replacement DDS texture (%s) of wrong format. Make sure it's DXGI_FORMAT_R8G8B8A8_UNORM or DXGI_FORMAT_B8G8R8A8_UNORM.\n", texturePath.c_str());
+		
+		// Place an empty texture in here, so on subsequent runs we don't try to re-read this file. Instead
+		// we'll find this empty texture and return a nullptr, just as we would on any other failure.
+		m_texture_map.emplace(checksum, std::unique_ptr<GSTexture, TextureDeleter>{nullptr, TextureDeleter(m_dev)});
 		return nullptr;
 	}
 
