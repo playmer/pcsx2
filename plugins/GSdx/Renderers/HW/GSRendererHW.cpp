@@ -41,57 +41,64 @@ int GSRendererHW::TryParseYaml() {
 	if (m_crc == 0)
 		return 1;
 
-	else if (m_enable_textures)
-	{
-		struct stat _statBuf = {};
-		std::string _crcText = GSUtil::GetHEX32String(m_crc);
+	if (!m_enable_textures)
+		return 1;
 
-		if (m_replace_textures)
+	if (!m_replace_textures)
+		return 1;
+
+	std::string yamlPath = "txtconfig\\";
+	yamlPath.append(GSUtil::GetHEX32String(m_crc));
+	yamlPath.append(".yaml");
+
+	struct stat _statBuf = {};
+	if (stat(yamlPath.c_str(), &_statBuf) != 0) {
+		printf("GSdx: The config file for this game cannot be found or is invalid. Texture replacements are disabled.\n");
+
+		m_enable_textures = 0;
+		m_replace_textures = 0;
+		m_dump_textures = 1;
+
+		return -1;
+	}
+
+	try {
+		YAML::Node yamlFile = YAML::LoadFile(yamlPath);
+
+		printf("GSdx: Found the texture configuration file! Processing...\n");
+		printf("GSdx: Capturing textures...\n");
+
+		if (yamlFile["ProcessTEX"])
 		{
-			std::string _dir = "txtconfig\\";
+			const std::string texturePath = "textures\\";
+			auto table = yamlFile["ProcessTEX"];
 
-			_dir.append(_crcText);
-			_dir.append(".yaml");
-
-			if (stat(_dir.c_str(), &_statBuf) == 0)
+			for (auto elem : table)
 			{
-				YAML::Node _yamlFile = YAML::LoadFile(_dir);
-
-				printf("GSdx: Found the texture configuration file! Processing...\n");
-				printf("GSdx: Capturing textures...\n");
-
-				if (_yamlFile["ProcessTEX"])
-				{
-					auto _table = _yamlFile["ProcessTEX"];
-
-					for (auto elem : _table)
-					{
-						std::string texturePath = "textures\\";
-						//auto _pair = std::pair<uint32_t, std::string>(elem.first.as<uint32_t>(), elem.second.as<std::string>());
-						//m_replacement_textures.insert(_pair);
-						m_replacement_textures.emplace(elem.first.as<uint32_t>(), texturePath + elem.second.as<std::string>());
-					}
-				}
-
-				else
-					printf("GSdx: Texture definition table is not found!\n");
-
-				printf("GSdx: All done!\n");
-				return 0;
-			}
-
-			else
-			{
-				printf("GSdx: The config file for this game cannot be found or is invalid. Texture replacements are disabled.\n");
-
-				m_enable_textures = 0;
-				m_replace_textures = 0;
-				m_dump_textures = 1;
-
-				return -1;
+				m_replacement_textures.emplace(elem.first.as<uint32_t>(), texturePath + elem.second.as<std::string>());
 			}
 		}
+		else {
+			printf("GSdx: Texture definition table is not found!\n");
+		}
 	}
+	catch (YAML::ParserException exception) {
+			printf("GSdx: Texture definition parsing {%s} failed with following error: %s\n", yamlPath.c_str(), exception.msg.c_str());
+			m_enable_textures = 0;
+			m_replace_textures = 0;
+			m_dump_textures = 1;
+			return -1;
+	}
+	catch (YAML::BadFile exception) {
+			printf("GSdx: Texture definition reading {%s} failed with following error: %s\n", yamlPath.c_str(), exception.msg.c_str());
+			m_enable_textures = 0;
+			m_replace_textures = 0;
+			m_dump_textures = 1;
+			return -1;
+	}
+
+	printf("GSdx: All done!\n");
+	return 0;
 }
 
 GSRendererHW::GSRendererHW(GSTextureCache* tc)
