@@ -1890,12 +1890,7 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 
 	// The textures have to be replaced inside of DrawPrims.
 	// Do not ask why.
-	if (replacedTexture != nullptr) {
-		DrawPrims(rt, ds, m_src, replacedTexture);
-	}
-	else {
-		DrawPrims(rt, ds, m_src);
-	}
+	DrawPrims(rt, ds, m_src, replacedTexture);
 
 	// This is the bane of my existence.
 	// Yes, this is hacky. Yes, this does not
