@@ -165,7 +165,6 @@ protected:
 	GSTextureCache* m_tc;
 	GSVector4i m_r;
 	GSTextureCache::Source* m_src;
-
 	
 	virtual void DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* tex, GSTexture* inp = nullptr) = 0;
 	int TryParseYaml();
