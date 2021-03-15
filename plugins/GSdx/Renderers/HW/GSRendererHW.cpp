@@ -68,13 +68,11 @@ int GSRendererHW::TryParseYaml() {
 		printf("GSdx: Found the texture configuration file! Processing...\n");
 		printf("GSdx: Capturing textures...\n");
 
-		if (yamlFile["ProcessTEX"])
-		{
+		if (yamlFile["ProcessTEX"]) {
 			const std::string texturePath = "textures\\";
 			auto table = yamlFile["ProcessTEX"];
 
-			for (auto elem : table)
-			{
+			for (auto elem : table) {
 				m_replacement_textures.emplace(elem.first.as<uint32_t>(), texturePath + elem.second.as<std::string>());
 			}
 		}
@@ -1633,7 +1631,9 @@ void GSRendererHW::Draw()
 		}
 	}
 
-	TextureHandling(rt_tex, ds_tex);
+	// The textures have to be replaced inside of DrawPrims.
+	// Do not ask why.
+	DrawPrims(rt_tex, ds_tex, m_src, TextureHandling(rt_tex, ds_tex));
 
 	frame_iterator++;
 
@@ -1868,7 +1868,7 @@ GSTexture* GSRendererHW::ReplaceTexture(uLong checksum)
 	return result.first->second.get();
 }
 
-void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
+GSTexture* GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 {
 	// Declare some temporary variables.
 	bool canDump = false;
@@ -1894,10 +1894,6 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 			}
 		}
 	}
-
-	// The textures have to be replaced inside of DrawPrims.
-	// Do not ask why.
-	DrawPrims(rt, ds, m_src, replacedTexture);
 
 	// This is the bane of my existence.
 	// Yes, this is hacky. Yes, this does not
@@ -1991,6 +1987,8 @@ void GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
 		// I do not want leaks to happen.
 		_aligned_free(data);
 	}
+
+	return replacedTexture;
 }
 
 
