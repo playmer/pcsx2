@@ -20,9 +20,84 @@
  */
 
 #include "stdafx.h"
+#include "DDS.h"
+#include "GSUtil.h"
 #include "GSRendererHW.h"
+#include "GSLocalMemory.h"
+#include "ghc/filesystem.h"
+#include "yaml-cpp/yaml.h"
+
+#include <iostream>
+#include <fstream>
+
+#include <zlib.h>
+#include <iomanip>
+
+#define NEEDS_SEPARATE_TEXTURE_FIX 0
 
 const float GSRendererHW::SSR_UV_TOLERANCE = 1e-3f;
+
+int GSRendererHW::TryParseYaml() {
+	if (m_crc == 0)
+		return 1;
+
+	if (!m_enable_textures)
+		return 1;
+
+	if (!m_replace_textures)
+		return 1;
+
+	std::string yamlPath = "txtconfig\\";
+	yamlPath.append(GSUtil::GetHEX32String(m_crc));
+	yamlPath.append(".yaml");
+
+	struct stat _statBuf = {};
+	if (stat(yamlPath.c_str(), &_statBuf) != 0) {
+		printf("GSdx: The config file for this game cannot be found or is invalid. Texture replacements are disabled.\n");
+
+		m_enable_textures = 0;
+		m_replace_textures = 0;
+		m_dump_textures = 1;
+
+		return -1;
+	}
+
+	try {
+		YAML::Node yamlFile = YAML::LoadFile(yamlPath);
+
+		printf("GSdx: Found the texture configuration file! Processing...\n");
+		printf("GSdx: Capturing textures...\n");
+
+		if (yamlFile["ProcessTEX"]) {
+			const std::string texturePath = "textures\\";
+			auto table = yamlFile["ProcessTEX"];
+
+			for (auto elem : table) {
+				m_replacement_textures.emplace(elem.first.as<uint32_t>(), texturePath + elem.second.as<std::string>());
+			}
+		}
+		else {
+			printf("GSdx: Texture definition table is not found!\n");
+		}
+	}
+	catch (YAML::ParserException exception) {
+			printf("GSdx: Texture definition parsing {%s} failed with following error: %s\n", yamlPath.c_str(), exception.msg.c_str());
+			m_enable_textures = 0;
+			m_replace_textures = 0;
+			m_dump_textures = 1;
+			return -1;
+	}
+	catch (YAML::BadFile exception) {
+			printf("GSdx: Texture definition reading {%s} failed with following error: %s\n", yamlPath.c_str(), exception.msg.c_str());
+			m_enable_textures = 0;
+			m_replace_textures = 0;
+			m_dump_textures = 1;
+			return -1;
+	}
+
+	printf("GSdx: All done!\n");
+	return 0;
+}
 
 GSRendererHW::GSRendererHW(GSTextureCache* tc)
 	: m_width(default_rt_size.x)
@@ -39,10 +114,14 @@ GSRendererHW::GSRendererHW(GSTextureCache* tc)
 	, m_channel_shuffle(false)
 	, m_lod(GSVector2i(0,0))
 {
+	frame_iterator = 0;
 	m_mipmap = theApp.GetConfigI("mipmap_hw");
 	m_upscale_multiplier = theApp.GetConfigI("upscale_multiplier");
 	m_conservative_framebuffer = theApp.GetConfigB("conservative_framebuffer");
 	m_accurate_date = theApp.GetConfigB("accurate_date");
+	m_enable_textures = theApp.GetConfigB("enable_texture_func");
+	m_dump_textures = theApp.GetConfigB("dump_textures");
+	m_replace_textures = theApp.GetConfigB("replace_textures");
 
 	if (theApp.GetConfigB("UserHacks")) {
 		m_userhacks_enabled_gs_mem_clear = !theApp.GetConfigB("UserHacks_Disable_Safe_Features");
@@ -75,6 +154,8 @@ GSRendererHW::GSRendererHW(GSTextureCache* tc)
 		m_userhacks_align_sprite_X       = false;
 		m_userHacks_merge_sprite         = false;
 	}
+
+	m_yaml_parsed = 1;
 
 	m_dump_root = root_hw;
 }
@@ -274,6 +355,13 @@ void GSRendererHW::Reset()
 
 	m_reset = true;
 
+	// On reset, release all of the textures parsed.
+	m_texture_map.clear();
+	m_replacement_textures.clear();
+
+	// Set the parse flag to 1 to cause a re-parse.
+	m_yaml_parsed = 1;
+
 	GSRenderer::Reset();
 }
 
@@ -303,6 +391,13 @@ void GSRendererHW::VSync(int field)
 void GSRendererHW::ResetDevice()
 {
 	m_tc->RemoveAll();
+
+	// On reset, release all of the textures parsed.
+	m_texture_map.clear();
+	m_replacement_textures.clear();
+
+	// Set the parse flag to 1 to cause a re-parse.
+	m_yaml_parsed = 1;
 
 	GSRenderer::ResetDevice();
 }
@@ -1135,6 +1230,34 @@ void GSRendererHW::RoundSpriteOffset()
 
 void GSRendererHW::Draw()
 {
+	if (m_dump_textures && m_enable_textures)
+	{
+		std::string _crcText = GSUtil::GetHEX32String(m_crc);
+		std::string _pathSys = "textures\\@DUMP\\";
+
+		_pathSys.append(_crcText);
+
+		if (ghc::filesystem::create_directories(_pathSys))
+			printf("GSdx: Creating necessary folders if they do not exist.\n");
+	}
+
+	// If the mode is set to dumping, and the yaml data has been processed;
+	if ((!m_enable_textures || m_dump_textures) && m_yaml_parsed != 1)
+	{
+		// If the yaml was parsed successfully;
+		if (m_yaml_parsed == 0)
+		{
+			m_texture_map.clear();
+			m_replacement_textures.clear();
+		}
+
+		m_yaml_parsed = 1;
+	}
+
+	// If replacing textures and the yaml has not been processed;
+	if (m_yaml_parsed == 1 && (m_replace_textures && m_enable_textures))
+		m_yaml_parsed = TryParseYaml();
+
 	if(m_dev->IsLost() || IsBadFrame()) {
 		GL_INS("Warning skipping a draw call (%d)", s_n);
 		return;
@@ -1508,11 +1631,14 @@ void GSRendererHW::Draw()
 		}
 	}
 
-	//
+	// The textures have to be replaced inside of DrawPrims.
+	// Do not ask why.
+	DrawPrims(rt_tex, ds_tex, m_src, TextureHandling(rt_tex, ds_tex));
 
-	DrawPrims(rt_tex, ds_tex, m_src);
+	frame_iterator++;
 
-	//
+	if (frame_iterator > 60)
+		frame_iterator = 0;
 
 	context->TEST = TEST;
 	context->FRAME = FRAME;
@@ -1590,6 +1716,281 @@ void GSRendererHW::Draw()
 		m_tc->Read(rt, m_r);
 	#endif
 }
+
+static const char* StatErrorToString()
+{
+	switch (errno)
+	{
+		case EACCES: 
+			return "Search permission is denied for a component of the path prefix.";
+		case EIO: 
+			return "An error occurred while reading from the file system.";
+		case ELOOP: 
+			return "A loop exists in symbolic links encountered during resolution of the path argument.";
+		case ENAMETOOLONG: 
+			return "The length of the path argument exceeds {PATH_MAX} or a pathname component is longer than {NAME_MAX}.";
+		case ENOENT: 
+			return "A component of path does not name an existing file or path is an empty string.";
+		case ENOTDIR: 
+			return "A component of the path prefix is not a directory.";
+		case EOVERFLOW: 
+			return "The file size in bytes or the number of blocks allocated to the file or the file serial number cannot be represented correctly in the structure pointed to by buf.";
+		default: 
+			return "Unknown Error";
+	}
+}
+
+std::unique_ptr<GSTexture, GSRendererHW::TextureDeleter> GSRendererHW::MakeUniqueTexture(GSDevice* device, int w, int h, int format){
+	GSTexture* texture = device->CreateTexture(w,h,format);
+	return std::unique_ptr<GSTexture, TextureDeleter>{texture, TextureDeleter(device)};
+}
+
+GSTexture* GSRendererHW::ReplaceTexture(uLong checksum)
+{
+	auto textureMapIt = m_texture_map.find(checksum);
+	if (textureMapIt != m_texture_map.end()) { // Already parsed and replaced this texture before, so return it.
+		return textureMapIt->second.get();
+	}
+
+	auto replacementTextureMapIt = m_replacement_textures.find(checksum);
+	if (replacementTextureMapIt == m_replacement_textures.end()) { // If a replacement exists for this element;
+		return nullptr;
+	}
+
+	const std::string& texturePath = replacementTextureMapIt->second; // Get the replacement's path.
+
+	struct stat statBuffer = {};
+	if (stat(texturePath.c_str(), &statBuffer) == -1) { // Couldn't find/access the given file path.
+		printf("Could not access replacement texture (%s) due to: %s", texturePath.c_str(), StatErrorToString());
+		return nullptr;
+	}
+	
+	DDS::DDSFile ddsFile = DDS::ReadDDS(texturePath.c_str()); // Parse the DDS file in the path.
+
+	if (ddsFile.Data.size() == 0) { // Some sort of read error occured. Likely we have an incorrectly formated DDS file.
+		printf("Error: Replacement DDS texture (%s) of wrong format. Make sure it's DXGI_FORMAT_R8G8B8A8_UNORM or DXGI_FORMAT_B8G8R8A8_UNORM.\n", texturePath.c_str());
+		
+		// Place an empty texture in here, so on subsequent runs we don't try to re-read this file. Instead
+		// we'll find this empty texture and return a nullptr, just as we would on any other failure.
+		m_texture_map.emplace(checksum, std::unique_ptr<GSTexture, TextureDeleter>{nullptr, TextureDeleter(m_dev)});
+		return nullptr;
+	}
+
+	// This loop is for adjusting the DDS' alpha to
+	// comply with PS2 Standards, since it is adjusted again
+	// on DrawPrims. If I do not do this, full opaque images
+	// look broken.
+	for (uint32_t i = 0; i < ddsFile.Data.size(); i += 0x04)
+		ddsFile.Data.at(0x03 + i) = ddsFile.Data.at(0x03 + i) / 2;
+	
+	int widthRatio =  0;
+	int heightRatio =  0;
+	
+	UniqueTexture texture = MakeUniqueTexture(m_dev, ddsFile.Header.dwWidth, ddsFile.Header.dwHeight);
+	
+	// Update the created GSTexture with the data from the DDS.
+	auto const pitch = ddsFile.Header.dwWidth * 4;
+	auto const rect = GSVector4i(0, 0, ddsFile.Header.dwWidth, ddsFile.Header.dwHeight);
+	texture->Update(rect, ddsFile.Data.data(), pitch, 0);
+	bool needsFixup = false;
+
+	// This part is complicated. Since we fix the textures
+	// that use UV for their size information, we cannot do
+	// a straight replacement like we do for textures that use
+	// actual size registers.
+	//
+	// To mitigate this, we need to calculate a canvas size for
+	// the replacements and apply the texture we read from the
+	// directory unto the canvas we created.
+	if (m_context->CLAMP.MAXU > 0 || m_context->CLAMP.MINU > 0) {
+		needsFixup = true;
+		// Get the origin UV Information.
+		auto u = m_context->CLAMP.MAXU > 0 ? m_context->CLAMP.MAXU : m_context->CLAMP.MINU;
+		auto v = m_context->CLAMP.MAXV > 0 ? m_context->CLAMP.MAXV : m_context->CLAMP.MINV;
+
+		// Correct the origin UV information to be a multiple of 32.
+		// Why a multiple of 32? Who knows! Textures come out garbled
+		// if I use 2, 8 or 16. So 32 it is.
+		u += 32 - (u % 32);
+		v += 32 - (v % 32);
+
+		// Calculate the relation between the canvas and the
+		// origin UV information.
+		widthRatio = (1 << m_context->TEX0.TW) / u;
+		heightRatio = (1 << static_cast<uint32>(m_context->TEX0.TH)) / v;
+	}
+	// Some games don't use the `System Size` at all.
+	//
+	// I do not know how they get their sizes. But I found
+	// that I can tap into the write rectangle of the source to get
+	// an acceptable texture. The downshot of this is, of course, that
+	// some textures may not be dumped correctly. 
+	//
+	// P.S. We basically do what we do for the UV stuff, but with m_write
+	// dimensions.
+	else if (m_context->TEX0.TW == 1024 && m_context->TEX0.TH == 1024) {
+		needsFixup = true;
+		auto writeRectWidth = m_src->m_write.rect->right;
+		auto writeRectHeight = m_src->m_write.rect->bottom;
+
+		writeRectWidth += 32 - (writeRectWidth % 32);
+		writeRectHeight += 32 - (writeRectHeight % 32);
+
+		widthRatio = (1 << m_context->TEX0.TW) / writeRectWidth;
+		heightRatio = (1 << static_cast<uint32>(m_context->TEX0.TH)) / writeRectHeight;
+	}
+	
+	if (needsFixup)
+	{
+		auto width = widthRatio * ddsFile.Header.dwWidth;
+		auto height = heightRatio * ddsFile.Header.dwHeight;
+
+		width = pow(2, ceil(log(width) / log(2)));
+		height = pow(2, ceil(log(height) / log(2)));
+
+		// Generate the canvas and applied the parsed texture
+		// to the generated canvas.
+		GSTexture* fixedTexture = m_dev->CreateTexture(width, height);
+		m_dev->CopyRect(texture.get(), fixedTexture, rect);
+		
+		texture.reset(fixedTexture);
+	}
+	
+	auto result = m_texture_map.emplace(checksum, std::move(texture));
+	
+	// This should never happen because we've already checked if there's
+	// an item with this key in the map, but for consistency we're
+	// checking.
+	if (result.second == false) { 
+		return nullptr;
+	}
+
+	return result.first->second.get();
+}
+
+GSTexture* GSRendererHW::TextureHandling(GSTexture* rt, GSTexture* ds)
+{
+	// Declare some temporary variables.
+	bool canDump = false;
+	GSTexture* replacedTexture = nullptr;
+	uLong checksum = 0;
+
+	if (m_enable_textures) { // If texture functions are enabled;
+		if (m_src && !m_src->m_from_target) { // If the texture is not a screenshot of the frame;			
+			if (m_src->m_palette_obj) { // If a palette of the texture don't exist, we can't replace it.
+				canDump = true;
+
+				// Capture the data to checksum.
+				auto palette = m_src->m_palette_obj.get();
+				auto paletteLength = palette->m_pal;
+
+				// Calculate a CRC32 value from the palette CLUT data.
+				auto const tempCRC = crc32(0, Z_NULL, 0);
+				checksum = crc32(tempCRC, reinterpret_cast<const Bytef*>(palette->m_clut), paletteLength * sizeof(uint32));
+				
+				if (m_replace_textures) {
+					replacedTexture = ReplaceTexture(checksum);
+				}
+			}
+		}
+	}
+
+	// This is the bane of my existence.
+	// Yes, this is hacky. Yes, this does not
+	// work for all games. But hey, the PS2 has
+	// no standards now, does it?
+	if (frame_iterator == 0 && canDump && m_dump_textures) { // If dumping;
+		std::string texturePath = "textures\\@DUMP\\"; // Signify dumping directory.
+
+		// Stringify game checksum and use it as the name for the folder of
+		// the dumped texture.
+		texturePath.append(GSUtil::GetHEX32String(m_crc));
+		texturePath.append("\\");
+
+		// Stringify image checksum and use it as the name for the dumped
+		// texture.
+		texturePath.append(GSUtil::GetHEX32String(checksum));
+		texturePath.append(".dds");
+		
+		struct stat statBuffer = {};
+		if (stat(texturePath.c_str(), &statBuffer) != 0) { // If the file is not found;
+			printf("GSdx: Dumping texture with ID: 0x%X\n", checksum);
+		}
+
+		// Get the dimensions from the registers.
+		auto const height = (1 << m_context->TEX0.TH);
+		auto const width = (1 << m_context->TEX0.TW);
+
+		// Fetch the pitch and create a rectangle for the texture.
+		auto const pitch = width * 4;
+		auto const rect = GSVector4i(0, 0, width, height);
+
+		// Calculate the data length and allocate memory for it.
+		auto const length = pitch * height;
+		void* data = _aligned_malloc(length, 32);
+
+		// Get the offset to the texture, as well as a pointer to the
+		// allocated memory for the image data.
+		auto offset = m_mem.GetOffset(m_context->TEX0.TBP0, m_context->TEX0.TBW, m_context->TEX0.PSM);
+		auto pointer = static_cast<uint8*>(data);
+		
+		// Capture the texture data.
+		m_mem.ReadTexture(offset, rect, pointer, pitch, m_src->m_TEXA);
+
+		// It seems that if a texture has no alpha information, the alpha 
+		// channel will come back as fully transparent. This tranformation 
+		// will turn such a texture fully opaque instead.
+		if (m_context->TEX0.TCC == 0)
+			for (int i = 3; i < length; i += 4)
+				pointer[i] = 255;
+
+		// Create the texture to be dumped and apply
+		// the captured data to it.
+		UniqueTexture texture = MakeUniqueTexture(m_dev, width, height);
+		texture->Update(rect, data, pitch);
+
+		int u = 0;
+		int v = 0;
+		bool needsFixup = false;
+
+		// Some games use a large canvas with UV parameters for their
+		// texture dimensions. If this is the case for this texture,
+		// we have to fix it.
+		if (m_context->CLAMP.MAXU > 0 || m_context->CLAMP.MINU > 0)
+		{
+			// Sometimes it uses the MAX, sometimes it uses the MIN, sometimes it's both.
+			u = m_context->CLAMP.MAXU > 0 ? m_context->CLAMP.MAXU : m_context->CLAMP.MINU;
+			v = m_context->CLAMP.MAXV > 0 ? m_context->CLAMP.MAXV : m_context->CLAMP.MINV;
+			needsFixup = true;
+		}
+		// Some games want me to suffer. This is not a good idea.
+		// But hey, it is the only thing I could come up with. Perhaps
+		// someone smarter than me will fix it. If so: PLEASE do.
+		else if (width == 1024 && height == 1024) {
+			u = m_src->m_write.rect->right;
+			v  = m_src->m_write.rect->bottom;
+			needsFixup = true;
+		} 
+
+		if (needsFixup) {
+			// Create and correct the output rect to be a multiple of 32.
+			// Why 32? I do not know. And I honestly do not want to know.
+			auto const uvRect = GSVector4i(0, 0, u, v);
+			auto textureSave = m_dev->CreateTexture(u + 32 - (u % 32), v + 32 - (v % 32));
+
+			m_dev->CopyRect(texture.get(), textureSave, uvRect);
+			texture.reset(textureSave);
+		}
+		
+		texture->SaveDDS(texturePath);
+
+		// I do not want leaks to happen.
+		_aligned_free(data);
+	}
+
+	return replacedTexture;
+}
+
 
 // hacks
 

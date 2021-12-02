@@ -21,9 +21,11 @@
 
 #include "stdafx.h"
 #include <limits.h>
+#include "fstream"
 #include "GSTextureOGL.h"
 #include "GLState.h"
 #include "GSPng.h"
+#include "DDS.h"
 
 #ifdef ENABLE_OGL_DEBUG_MEM_BW
 extern uint64 g_real_texture_upload_byte;
@@ -551,6 +553,49 @@ void GSTextureOGL::CommitPages(const GSVector2i& region, bool commit)
 
 	m_mem_usage = (m_committed_size.x * m_committed_size.y) << m_int_shift;
 	GLState::available_vram -= m_mem_usage;
+}
+
+bool GSTextureOGL::SaveDDS(const std::string& fileName)
+{
+	// Collect the texture data
+	uint32 pitch = 4 * m_committed_size.x;
+	uint32 buf_size = pitch * m_committed_size.y * 2; // Note *2 for security (depth/stencil)
+	std::unique_ptr<uint8[]> image(new uint8[buf_size]);
+
+	if (IsBackbuffer()){
+		glReadPixels(0, 0, m_committed_size.x, m_committed_size.y, GL_RGBA, GL_UNSIGNED_BYTE, image.get());
+	}
+	else if (IsDss()) {
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_read);
+
+		glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, m_texture_id, 0);
+		glReadPixels(0, 0, m_committed_size.x, m_committed_size.y, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, image.get());
+
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	}
+	else if (m_format == GL_R32I) {
+		glGetTextureImage(m_texture_id, 0, GL_RED_INTEGER, GL_INT, buf_size, image.get());
+	}
+	else {
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, m_fbo_read);
+
+		glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture_id, 0);
+
+		if (m_format == GL_RGBA8) {
+			glReadPixels(0, 0, m_committed_size.x, m_committed_size.y, GL_RGBA, GL_UNSIGNED_BYTE, image.get());
+		}
+		else if (m_format == GL_R16UI) {
+			glReadPixels(0, 0, m_committed_size.x, m_committed_size.y, GL_RED_INTEGER, GL_UNSIGNED_SHORT, image.get());
+		}
+		else if (m_format == GL_R8) {
+			glReadPixels(0, 0, m_committed_size.x, m_committed_size.y, GL_RED, GL_UNSIGNED_BYTE, image.get());
+		}
+
+		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+	}
+
+	int const _dataSize = pitch * m_committed_size.y;
+	return DDS::WriteDDS(fileName, _dataSize, m_committed_size.x, m_committed_size.y, image.get());
 }
 
 bool GSTextureOGL::Save(const std::string& fn)

@@ -553,7 +553,7 @@ void GSRendererOGL::EmulateBlending(bool& DATE_GL42, bool& DATE_GL45)
 	}
 }
 
-void GSRendererOGL::EmulateTextureSampler(const GSTextureCache::Source* tex)
+void GSRendererOGL::EmulateTextureSampler(const GSTextureCache::Source* tex, GSTexture* inp)
 {
 	GSDeviceOGL* dev         = (GSDeviceOGL*)m_dev;
 
@@ -711,6 +711,12 @@ void GSRendererOGL::EmulateTextureSampler(const GSTextureCache::Source* tex)
 	int tw = (int)(1 << m_context->TEX0.TW);
 	int th = (int)(1 << m_context->TEX0.TH);
 
+	if (inp)
+	{
+		w = inp->GetWidth();
+		h = inp->GetHeight();
+	}
+
 	GSVector4 WH(tw, th, w, h);
 
 	m_ps_sel.fst = !!PRIM->FST;
@@ -768,7 +774,13 @@ void GSRendererOGL::EmulateTextureSampler(const GSTextureCache::Source* tex)
 
 	// Setup Texture ressources
 	dev->SetupSampler(m_ps_ssel);
-	dev->PSSetShaderResources(tex->m_texture, tex->m_palette);
+
+	if (inp != nullptr) {
+		dev->PSSetShaderResources(inp, tex->m_palette);
+	}
+	else {
+		dev->PSSetShaderResources(tex->m_texture, tex->m_palette);
+	}
 }
 
 GSRendererOGL::PRIM_OVERLAP GSRendererOGL::PrimitiveOverlap()
@@ -938,7 +950,7 @@ void GSRendererOGL::ResetStates()
 	m_om_dssel.key = 0;
 }
 
-void GSRendererOGL::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* tex)
+void GSRendererOGL::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* tex, GSTexture* inp)
 {
 #ifdef ENABLE_OGL_DEBUG
 	GSVector4i area_out = GSVector4i(m_vt.m_min.p.xyxy(m_vt.m_max.p)).rintersect(GSVector4i(m_context->scissor.in));
@@ -1039,6 +1051,8 @@ void GSRendererOGL::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sour
 				m_require_full_barrier = true;
 				DATE_GL45 = true;
 			}
+
+			// Note: Fast level (DATE_one) was removed as it's less accurate.
 			else if (m_accurate_date)
 			{
 				// Note: Fast level (DATE_one) was removed as it's less accurate.
@@ -1054,6 +1068,7 @@ void GSRendererOGL::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sour
 				}
 			}
 		}
+
 		else if (!m_om_csel.wa && !m_context->TEST.ATE)
 		{
 			// TODO: is it legal ? Likely but it need to be tested carefully
@@ -1221,8 +1236,13 @@ void GSRendererOGL::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sour
 	}
 
 	if (tex) {
-		EmulateTextureSampler(tex);
-	} else {
+		if (inp)
+			EmulateTextureSampler(tex, inp);
+
+		else
+			EmulateTextureSampler(tex);
+	}
+	else {
 		m_ps_sel.tfx = 4;
 	}
 

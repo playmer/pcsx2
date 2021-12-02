@@ -45,6 +45,7 @@ endif()
 
 
 set(GSdxSources
+    DDS.cpp
     GS.cpp
     GSAlignedClass.cpp
     GSBlock.cpp
@@ -109,6 +110,7 @@ set(GSdxSources
     )
 
 set(GSdxHeaders
+    DDS.h
     config.h
     GSAlignedClass.h
     GSBlock.h
@@ -238,6 +240,7 @@ set(GSdxFinalLibs
     ${PNG_LIBRARIES}
     ${FREETYPE_LIBRARIES}
     ${LIBLZMA_LIBRARIES}
+    yaml-cpp
 )
 
 if(USE_VTUNE)
@@ -263,6 +266,7 @@ set(RESOURCE_FILES
 
 add_custom_glib_res("GSdxResources" "gsdx-res.xml" "GSdx_res" ${RESOURCE_FILES})
 
+include_directories(${CMAKE_SOURCE_DIR}/3rdparty/include)
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
 
 if(BUILTIN_GS)

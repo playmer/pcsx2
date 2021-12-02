@@ -28,6 +28,7 @@
 class GSRendererHW : public GSRenderer
 {
 private:
+	int frame_iterator;
 	int m_width;
 	int m_height;
 	int m_custom_width;
@@ -142,11 +143,36 @@ private:
 	template <bool linear> void RoundSpriteOffset();
 
 protected:
+	struct TextureDeleter {
+		TextureDeleter(GSDevice* device)
+			: m_device{device} 
+		{
+	
+		}
+
+		void operator()(GSTexture* texture) {
+		}
+
+		GSDevice* m_device;
+	};
+
+	static std::unique_ptr<GSTexture, TextureDeleter> MakeUniqueTexture(GSDevice* device, int w, int h, int format = 0);
+
+	using UniqueTexture = std::unique_ptr<GSTexture, TextureDeleter>;
+
+	std::map<uint32_t, UniqueTexture> m_texture_map;
+	std::map<uint32_t, std::string> m_replacement_textures;
 	GSTextureCache* m_tc;
 	GSVector4i m_r;
 	GSTextureCache::Source* m_src;
+	
+	virtual void DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* tex, GSTexture* inp = nullptr) = 0;
+	int TryParseYaml();
+	GSTexture* TextureHandling(GSTexture* rt, GSTexture* ds);
+	GSTexture* ReplaceTexture(uLong checksum);
 
-	virtual void DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Source* tex) = 0;
+	// Used as a three-way flag. Made to combat the 0x00000000 CRC at the beginning. 
+	int m_yaml_parsed;
 
 	int m_userhacks_round_sprite_offset;
 	int m_userHacks_HPO;

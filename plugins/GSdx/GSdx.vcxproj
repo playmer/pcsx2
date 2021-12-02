@@ -83,14 +83,19 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
+      <LanguageStandard Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <ModuleDefinitionFile>.\GSdx.def</ModuleDefinitionFile>
       <TargetMachine Condition="'$(Platform)'=='Win32'">MachineX86</TargetMachine>
       <TargetMachine Condition="'$(Platform)'=='x64'">MachineX64</TargetMachine>
     </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="DDS.cpp" />
     <ClCompile Include="Renderers\OpenGL\GLLoader.cpp" />
     <ClCompile Include="Renderers\OpenGL\GLState.cpp" />
     <ClCompile Include="GS.cpp" />
@@ -168,6 +173,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="config.h" />
+    <ClInclude Include="DDS.h" />
     <ClInclude Include="Renderers\OpenGL\GLLoader.h" />
     <ClInclude Include="Renderers\OpenGL\GLState.h" />
     <ClInclude Include="GS.h" />
@@ -283,6 +289,15 @@
     <ProjectReference Include="..\..\3rdparty\baseclasses\baseclasses.vcxproj">
       <Project>{27f17499-a372-4408-8afa-4f9f4584fbd3}</Project>
     </ProjectReference>
+    <ProjectReference Include="..\..\3rdparty\yaml-cpp\yaml.vcxproj">
+      <Project>{48329442-e41b-4a1f-8364-36eee1b71343}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\3rdparty\zlib\zlib.vcxproj">
+      <Project>{2f6c0388-20cb-4242-9f6c-a6ebb6a83f47}</Project>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Font Include="res\fonts-roboto\Roboto-Regular.ttf" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

@@ -20,8 +20,10 @@
  */
 
 #include "stdafx.h"
+#include "fstream"
 #include "GSTexture11.h"
 #include "GSPng.h"
+#include "DDS.h"
 
 GSTexture11::GSTexture11(ID3D11Texture2D* texture)
 	: m_texture(texture), m_layer(0)
@@ -101,6 +103,41 @@ void GSTexture11::Unmap()
 		UINT subresource = m_layer;
 		m_ctx->Unmap(m_texture, subresource);
 	}
+}
+
+bool GSTexture11::SaveDDS(const std::string& fileName)
+{
+	CComPtr<ID3D11Texture2D> res;
+	D3D11_TEXTURE2D_DESC desc;
+
+	m_texture->GetDesc(&desc);
+
+	desc.Usage = D3D11_USAGE_STAGING;
+	desc.BindFlags = 0;
+	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+
+	HRESULT hr = m_dev->CreateTexture2D(&desc, nullptr, &res);
+	if (FAILED(hr))
+	{
+		return false;
+	}
+
+	m_ctx->CopyResource(res, m_texture);
+
+	res->GetDesc(&desc);
+
+	D3D11_MAPPED_SUBRESOURCE sm;
+
+	hr = m_ctx->Map(res, 0, D3D11_MAP_READ, 0, &sm);
+	if (FAILED(hr))
+	{
+		return false;
+	}
+	
+	int const _dataSize = desc.Height * desc.Width * 4;
+	bool success = DDS::WriteDDS(fileName, _dataSize, desc.Width, desc.Height, static_cast<uint8*>(sm.pData));
+	m_ctx->Unmap(res, 0);
+	return success;
 }
 
 bool GSTexture11::Save(const std::string& fn)

@@ -62,12 +62,13 @@ public:
 	class Palette
 	{
 	private:
-		uint32* m_clut;
-		uint16 m_pal;
 		GSTexture* m_tex_palette;
 		const GSRenderer* m_renderer;
 
 	public:
+		uint32* m_clut;
+		uint16 m_pal;
+
 		Palette(const GSRenderer* renderer, uint16 pal, bool need_gs_texture);
 		~Palette();
 
@@ -98,12 +99,11 @@ public:
 
 	class Source : public Surface
 	{
-		struct {GSVector4i* rect; uint32 count;} m_write;
-
 		void Write(const GSVector4i& r, int layer);
 		void Flush(uint32 count, int layer);
 
 	public:
+		struct { GSVector4i* rect; uint32 count; } m_write;
 		std::shared_ptr<Palette> m_palette_obj;
 		GSTexture* m_palette;
 		uint32 m_valid[MAX_PAGES]; // each uint32 bits map to the 32 blocks of that page
